@@ -100,6 +100,16 @@ class BusTests(unittest.TestCase):
         data = self.bus.subscribe('custom', 3).read()
         self.assertEqual((data['temperature_c'], data['schema_version'], data['instance_id']), (21.5, 2, 3))
 
+    def test_labels_exist_before_first_publication(self):
+        topic = self.bus.advertise('performance', self.definition, instance=7, label='virtual_imu')
+        self.assertEqual(topic.label, 'virtual_imu')
+        self.assertEqual(topic.sequence, 0)
+        self.assertIs(self.bus.advertise('performance', self.definition, instance=7), topic)
+        with self.assertRaises(ValueError):
+            self.bus.advertise('performance', self.definition, instance=7, label='motor')
+        with self.assertRaises(ValueError):
+            self.bus.advertise('invalid_label', self.definition, label='x' * 49)
+
     def test_clock_wrap(self):
         reading = [250]
         diff = lambda a, b: (a - b + 128) % 256 - 128

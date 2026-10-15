@@ -115,7 +115,8 @@ def _setup_messages():
                              ("velocity_setpoint", VELOCITY_SETPOINT)):
         bus.advertise(name, definition)
     for index in range(len(CALLBACKS)):
-        bus.advertise("task_performance", TASK_PERFORMANCE, instance=index)
+        bus.advertise("task_performance", TASK_PERFORMANCE, instance=index,
+                      label=CALLBACKS[index][0])
     _performance_payload = TASK_PERFORMANCE.new()
     _bus_payload, _robot_payload = BUS_STATUS.new(), ROBOT_STATUS.new()
     _diag_previous = [(0, 0, 0, bus.clock.now_us()) for _ in CALLBACKS]
@@ -393,16 +394,34 @@ async def _console_write(text):
         await _wait_until(ticks_add(ticks_us(), 5000))
 
 
-async def topics():
-    """List topic instances, schema versions and publication sequences."""
+async def topics(name=None):
+    """List topic identities; optionally filter by an exact topic name."""
     if bus is None:
         raise RuntimeError("Start the robot first")
-    await _console_write("topic[instance]              schema v  depth  sequence  subs\n")
-    for key in sorted(bus.topics):
+    keys = sorted(key for key in bus.topics if name is None or key[0] == name)
+    if not keys:
+        raise ValueError("Unknown topic; use await topics()")
+    await _console_write("topic[instance] (identity)                  schema v  depth  sequence  subs\n")
+    for key in keys:
         topic = bus.topics[key]
-        await _console_write("{}[{}]  {} v{}  {}  {}  {}\n".format(
-            topic.name, topic.instance, topic.schema.name, topic.schema.version,
+        identity = "{}[{}]".format(topic.name, topic.instance)
+        if topic.label:
+            identity += " ({})".format(topic.label)
+        await _console_write("{:<42} {} v{}  {}  {}  {}\n".format(
+            identity, topic.schema.name, topic.schema.version,
             topic.depth, topic.sequence, len(topic.subscribers)))
+
+
+def _resolve_instance(name, instance):
+    if type(instance) is str:
+        matches = [topic.instance for topic in bus.topics.values()
+                   if topic.name == name and topic.label == instance]
+        if len(matches) != 1:
+            raise ValueError("Unknown or ambiguous instance label; use await topics()")
+        return matches[0]
+    if type(instance) is not int or instance < 0:
+        raise ValueError("instance must be a nonnegative number or an identity label")
+    return instance
 
 
 async def listener(name, instance=0, count=None, rate_hz=2, timeout_ms=5000):
@@ -417,6 +436,7 @@ async def listener(name, instance=0, count=None, rate_hz=2, timeout_ms=5000):
         raise ValueError("count must be a positive integer or None")
     if not 0.1 <= rate_hz <= 10 or not 1 <= timeout_ms <= 60_000:
         raise ValueError("rate_hz must be 0.1..10 and timeout_ms 1..60000")
+    instance = _resolve_instance(name, instance)
     if (name, instance) not in bus.topics:
         raise ValueError("Unknown topic/instance; use await topics()")
     sub = bus.subscribe(name, instance)
@@ -427,8 +447,9 @@ async def listener(name, instance=0, count=None, rate_hz=2, timeout_ms=5000):
         while count is None or printed < count:
             if sub.read_into(sample):
                 last_data = ticks_ms()
-                await _console_write("\n{}[{}] sequence={} missed={}\n".format(
-                    name, instance, sample["sequence"], sub.missed))
+                label = " ({})".format(sub.topic.label) if sub.topic.label else ""
+                await _console_write("\n{}[{}]{} sequence={} missed={}\n".format(
+                    name, instance, label, sample["sequence"], sub.missed))
                 for key, value in sample.items():
                     await _console_write("  {}: {}\n".format(key, value))
                 printed += 1

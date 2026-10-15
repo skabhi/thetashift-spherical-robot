@@ -50,6 +50,17 @@ robot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(robot)
 
 robot.capture(120, capacity=8)
+assert robot.bus.topic('task_performance', 0).label == 'motor'
+assert robot._resolve_instance('task_performance', 'motor') == 0
+assert robot._resolve_instance('task_performance', 'virtual_imu') == 7
+subscriptions_before = robot.bus.subscription_count
+try:
+    robot._resolve_instance('task_performance', 'missing')
+except ValueError:
+    pass
+else:
+    raise AssertionError('Missing identity label was accepted')
+assert robot.bus.subscription_count == subscriptions_before
 assert frequency[0] == 240000000
 assert robot._used == 8 and robot._dropped > 0
 assert all(s['runs'] > 0 for s in robot._stats)

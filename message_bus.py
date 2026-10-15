@@ -91,9 +91,10 @@ class MessageDef:
 
 
 class Topic:
-    def __init__(self, bus, name, schema, instance, depth):
+    def __init__(self, bus, name, schema, instance, depth, label=""):
         self.bus, self.name, self.schema = bus, name, schema
         self.instance, self.depth = instance, depth
+        self.label = label
         self.sequence = 0
         self.buffer = [None] * depth
         self.subscribers = []
@@ -176,20 +177,24 @@ class Bus:
         self.subscription_count = self.publications = 0
         self.retained_overwrites = self.subscriber_missed = self.queue_evictions = 0
 
-    def advertise(self, name, schema, instance=0, depth=1):
+    def advertise(self, name, schema, instance=0, depth=1, label=""):
         if not name or len(name) > 48 or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in name):
             raise ValueError("Topic names use lowercase letters, digits and underscores")
         if type(instance) is not int or instance < 0 or not 1 <= depth <= 32:
             raise ValueError("Invalid instance or depth")
+        if type(label) is not str or len(label) > 48:
+            raise ValueError("Topic label must be a string of at most 48 characters")
         key = (name, instance)
         if key in self.topics:
             topic = self.topics[key]
             if topic.schema is not schema or topic.depth != depth:
                 raise ValueError("Topic already registered with another definition")
+            if label and topic.label != label:
+                raise ValueError("Topic already registered with another label")
             return topic
         if len(self.topics) >= self.max_topics:
             raise RuntimeError("Topic limit reached")
-        topic = Topic(self, name, schema, instance, depth)
+        topic = Topic(self, name, schema, instance, depth, label)
         self.topics[key] = topic
         return topic
 

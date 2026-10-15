@@ -48,6 +48,8 @@ try:
     listing = command('await topics()')
     for name in ('imu_sample', 'simulation_state', 'imu_summary', 'task_performance', 'bus_status'):
         assert name in listing
+    assert 'task_performance[0] (motor)' in listing
+    assert 'task_performance[7] (virtual_imu)' in listing
     assert 'logger' not in command("print('TASKS', [x[0] for x in robot.CALLBACKS])").split('TASKS [')[-1]
     stationary = command("await listener('imu_sample', count=2)")
     assert 'simulated: True' in stationary and 'accel_z: 9.806' in stationary
@@ -58,7 +60,7 @@ try:
     assert 'scenario: oscillation' in command("await listener('simulation_state', count=2)")
     summary = command("await listener('imu_summary', count=2)")
     assert 'accel_magnitude: 9.806' in summary and 'valid: True' in summary
-    performance = command("await listener('task_performance', instance=0, count=1)")
+    performance = command("await listener('task_performance', instance='motor', count=1)")
     assert 'task_name: motor' in performance
     assert 'publications:' in command("await listener('bus_status', count=1)")
     assert 'logger_enabled: False' in command("await listener('robot_status', count=1)")

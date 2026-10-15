@@ -1,5 +1,7 @@
 # Messages and task extension guide
 
+[Handbook](README.md) · [Contents](SUMMARY.md)
+
 This is a small uORB-inspired bus implemented for one MicroPython asyncio
 event loop, not PX4 uORB wire compatibility. Topics are local to the MCU.
 No threads, interrupt callbacks, device files or external broker are needed.
@@ -21,6 +23,10 @@ Each task has a separate `task_performance` instance. Currently: motor=0,
 speed_brake=1, wifi=2, bluetooth=3, messages=4, manual=5, velocity=6,
 virtual_imu=7, example=8. The mapping follows `robot.CALLBACKS`; always check
 `task_name` rather than relying on a permanent numeric assignment.
+`await topics('task_performance')` shows these names beside the instance
+numbers. You can select them with `instance='motor'` or
+`instance='virtual_imu'` in listener commands. Labels are registration metadata,
+so identification works even before the first sample is published.
 
 There are no assumptions about motor count, servo layout, encoder type or
 physical sensor model. Those definitions can be added once hardware is chosen.
@@ -57,7 +63,8 @@ separate from publication time.
 
 ## Delivery and memory ownership
 
-- `advertise(name, definition, instance=0, depth=1)` creates a bounded topic.
+- `advertise(name, definition, instance=0, depth=1, label='')` creates a bounded
+  topic with optional human-readable identity metadata (up to 48 characters).
 - `publish(payload, source_id=...)` validates and copies scalar values into
   an immutable tuple. The publisher may reuse its original payload dict.
 - `subscribe(name, instance=0, replay=True)` gives each consumer its own
@@ -112,9 +119,10 @@ At the async `robot>` prompt:
 
 ```python
 await topics()
+await topics('task_performance')
 await listener('imu_sample')
 await listener('imu_sample', count=3, rate_hz=2)
-await listener('task_performance', instance=0, count=1)
+await listener('task_performance', instance='motor', count=1)
 ```
 
 Ctrl+C stops only the listener and returns to the prompt. It does not stop
@@ -127,6 +135,7 @@ be checked by real consumers independently of listener output.
 
 The console is still Python: use `await listener('imu_sample')`, not the
 PX4 shell syntax `listener imu_sample`.
+The [console reference](console-tools.md) documents all arguments and fields.
 
 ## Adding a new message and task
 
@@ -194,3 +203,5 @@ exists, an SD logger or Raspberry Pi transport can subscribe to selected
 topics using bounded buffering. Full-rate recordings need sufficient
 queued retention and throughput; a latest-sample subscriber does not
 guarantee complete recording. Storage must not block control callbacks.
+
+Next: [Trace and timeline →](tracing.md)
