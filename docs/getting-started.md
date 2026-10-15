@@ -19,6 +19,9 @@ Set-Location thetashift-spherical-robot
 
 If your computer uses `python` instead of `py`, substitute that command.
 The uploader itself invokes `python`, so that command must be available.
+Commands in this handbook run from the repository root. Device code lives
+under `firmware/`; uploader/viewer helpers live under `tools/`; tests live
+under `tests/`.
 
 The examples use COM6. Find your board's port with:
 
@@ -39,14 +42,14 @@ Press Ctrl+] to disconnect. Close other applications using the port.
 From the repository directory in PowerShell:
 
 ```powershell
-.\upload.ps1 -Port COM6
+.\tools\upload.ps1 -Port COM6
 ```
 
 This installs official MicroPython aiorepl, copies Python message definitions
 and firmware modules, then resets the ESP32. It does not copy host tests,
 documentation, traces or Python cache files to the board.
 
-`main.py` starts the robot async console automatically after a normal boot.
+`firmware/main.py` starts the robot async console automatically after a normal boot.
 If Python reports an import error, check that all modules and `messages/`
 were copied; uploading only `robot.py` is insufficient on a fresh board.
 

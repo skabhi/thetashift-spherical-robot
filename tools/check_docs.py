@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-root = Path(__file__).resolve().parent
+root = Path(__file__).resolve().parents[1]
 documents = [root / 'README.md'] + sorted((root / 'docs').rglob('*.md'))
 link_pattern = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
 checked = 0

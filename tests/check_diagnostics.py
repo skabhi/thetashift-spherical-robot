@@ -32,6 +32,8 @@ class TimerPolicy(asyncio.DefaultEventLoopPolicy):
 asyncio.set_event_loop_policy(TimerPolicy())
 
 root = Path(__file__).parent
+firmware = root.parent / 'firmware'
+sys.path.insert(0, str(firmware))
 wrap = 1 << 30
 time.ticks_us = lambda: (time.monotonic_ns() // 1000) % wrap
 time.ticks_ms = lambda: (time.monotonic_ns() // 1_000_000) % wrap
@@ -45,7 +47,7 @@ def freq(value=None):
         frequency[0] = value
     return frequency[0]
 sys.modules['machine'] = types.SimpleNamespace(freq=freq)
-spec = importlib.util.spec_from_file_location('robot', root / 'robot.py')
+spec = importlib.util.spec_from_file_location('robot', firmware / 'robot.py')
 robot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(robot)
 

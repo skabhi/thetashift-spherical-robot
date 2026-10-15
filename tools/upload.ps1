@@ -1,6 +1,6 @@
 param([string]$Port = 'COM6')
 $ErrorActionPreference = 'Stop'
-Push-Location $PSScriptRoot
+Push-Location (Join-Path $PSScriptRoot '..\firmware')
 try {
     # Use native >>> (Ctrl+D from robot>) before uploading. Updating files
     # inside aiorepl's raw compatibility mode does not reload imported code.

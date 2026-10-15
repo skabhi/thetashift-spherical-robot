@@ -2,6 +2,10 @@
 import math
 import time
 import unittest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'firmware'))
 
 WRAP = 1 << 30
 time.ticks_us = lambda: time.monotonic_ns() // 1000 % WRAP

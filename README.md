@@ -4,7 +4,8 @@ ESP32 MicroPython firmware for a spherical robot, with independently timed
 task steps, a bounded publish/subscribe bus, virtual IMU data, live task
 monitoring, a topic listener, and execution timelines.
 
-**[Read the robot handbook](docs/README.md)** · [Book contents](docs/SUMMARY.md)
+**[Read the documentation website](https://skabhi.github.io/thetashift-spherical-robot/)**
+· [Handbook source](docs/README.md) · [Book contents](docs/SUMMARY.md)
 · [Console command reference](docs/console-tools.md)
 
 ## Current capabilities
@@ -30,7 +31,7 @@ In PowerShell:
 py -m pip install --upgrade mpremote
 git clone https://github.com/skabhi/thetashift-spherical-robot.git
 Set-Location thetashift-spherical-robot
-.\upload.ps1 -Port COM6
+.\tools\upload.ps1 -Port COM6
 py -m mpremote connect COM6 repl
 ```
 
@@ -71,19 +72,43 @@ task_performance[7] (virtual_imu)
 | [Tests and measurements](docs/testing.md) | Host tests, hardware checks and measured results |
 | [Publish the handbook](docs/publishing.md) | GitHub reading and optional GitBook Git Sync |
 
-The book is available directly in this repository. `.gitbook.yaml` and
-`docs/SUMMARY.md` prepare the same chapters for GitBook; no separate GitBook
-site has been created or published.
+The GitHub Pages website provides chapter navigation, full-text search,
+copyable code blocks and light/dark themes. Pushes to `main` rebuild and
+publish it automatically. The same Markdown is readable on GitHub and
+remains compatible with GitBook Git Sync.
+
+## Repository layout
+
+```text
+firmware/                  ESP32 sources; uploaded to the board's root
+  main.py                  Boot entry point
+  robot.py                 Task scheduler and async console tools
+  message_bus.py           Bounded publish/subscribe bus
+  virtual_imu.py           Simulated sensor publisher
+  example_task.py          Subscribe/process/publish example
+  messages/                Versioned message definitions
+tools/                     Computer-side uploader, trace viewer and helpers
+tests/                     Host unit checks and serial integration tests
+docs/                      Handbook Markdown sources
+mkdocs.yml                 Website theme and navigation
+.github/workflows/docs.yml  Build and publish GitHub Pages
+artifacts/                 Local trace data and generated viewers (ignored)
+```
+
+Firmware files stay flat on the ESP32: the source folder organization does
+not change device imports such as `import robot`. Run the examples and tools
+from the repository root unless a command says otherwise.
 
 ## Development
 
 ```powershell
-python -m unittest -v test_message_bus
-python check_diagnostics.py
+python -m unittest discover -s tests -p test_message_bus.py -v
+python tests/check_diagnostics.py
 ```
 
-Start with [example_task.py](example_task.py) for the subscriber/publisher
-pattern. Extend definitions under `messages/` and register tasks in robot.py.
+Start with [firmware/example_task.py](firmware/example_task.py) for the subscriber/publisher
+pattern. Extend definitions under `firmware/messages/` and register tasks in
+`firmware/robot.py`.
 See the handbook for lifecycle, ownership and uploader requirements.
 
 Normal operation on the tested board achieved motor/IMU rates of 100 Hz

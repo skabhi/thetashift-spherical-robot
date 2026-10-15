@@ -7,9 +7,9 @@
 From the repository directory:
 
 ```powershell
-python -m unittest -v test_message_bus
-python check_diagnostics.py
-python check_docs.py
+python -m unittest discover -s tests -p test_message_bus.py -v
+python tests/check_diagnostics.py
+python tools/check_docs.py
 ```
 
 Bus tests cover copied ownership, independent subscribers, latest/queued
@@ -30,11 +30,11 @@ Reset before each test so it starts with the default virtual scenario:
 
 ```powershell
 py -m mpremote connect COM6 reset
-python test_live_console.py
+python tests/test_live_console.py
 py -m mpremote connect COM6 reset
-python test_bus_console.py
+python tests/test_bus_console.py
 py -m mpremote connect COM6 reset
-python test_topic_console.py
+python tests/test_topic_console.py
 ```
 
 They verify finite and continuous monitors, Ctrl+C cancellation, reopened
@@ -62,7 +62,7 @@ real drivers/controllers changes CPU use. Retest each actual workload.
 For a sleep timing probe, stop the async console, disconnect and run:
 
 ```powershell
-py -m mpremote connect COM6 run probe_timing.py
+py -m mpremote connect COM6 run tools/probe_timing.py
 ```
 
 This runs a local measurement script on the board without installing it.

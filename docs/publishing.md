@@ -2,41 +2,65 @@
 
 [Handbook](README.md) · [Contents](SUMMARY.md)
 
-## GitHub: available immediately
+## Live documentation
 
-The documentation's home is [docs/README.md](README.md). GitHub renders the
-Markdown pages, links and tables directly. The repository README links to
-this home; each chapter links back to the contents and forward to the next.
-Documentation is versioned beside the code and can be reviewed in commits.
+The handbook is published on **[GitHub Pages](https://skabhi.github.io/thetashift-spherical-robot/)**.
+It uses Material for MkDocs for chapter navigation, search, copyable code
+blocks, light/dark themes and a responsive layout. Markdown sources stay in
+docs/ and are also readable directly on GitHub.
 
-The full book navigation is in [SUMMARY.md](SUMMARY.md). Keep each chapter
-listed once and update it when adding or renaming a page.
+## Automatic publishing
 
-## Optional GitBook site
+The workflow at `.github/workflows/docs.yml` runs on pushes to main and on
+manual dispatch. It installs the pinned builder, checks local links,
+builds with `mkdocs build --strict`, uploads the site artifact and deploys
+through the GitHub Pages environment. Failed builds do not replace the
+previous site. The repository's Pages publishing source is GitHub Actions.
 
-The repository includes `.gitbook.yaml` at its root, pointing to `docs/`
-with README.md as the introduction and SUMMARY.md as navigation. These are
-the configuration files used by [GitBook Git Sync](https://gitbook.com/docs/docs-as-code/git-sync/content-configuration).
+Edit handbook pages under docs/. Keep navigation in mkdocs.yml and
+SUMMARY.md consistent when adding or renaming chapters. Do not commit the
+site/ build output; it is ignored by Git.
 
-To host the same book on GitBook, create/select a GitBook documentation
-space/site and connect Git Sync to `skabhi/thetashift-spherical-robot`,
-branch `main`. Use the repository root as the project/mapped directory so
-the root configuration can select docs/. Import the repository's existing
-content on the initial sync instead of overwriting it with a blank space.
-Review the resulting navigation, then publish from GitBook.
+## Build and preview locally
 
-This repository configuration prepares the content; it does not create a
-GitBook account, link an organization, or publish a separate hosted site.
-Until that connection is made, use the working GitHub handbook link.
+In PowerShell from the repository root:
+
+```powershell
+python -m venv .venv-docs
+.\.venv-docs\Scripts\python.exe -m pip install -r requirements-docs.txt
+.\.venv-docs\Scripts\python.exe tools/check_docs.py
+.\.venv-docs\Scripts\python.exe -m mkdocs build --strict
+.\.venv-docs\Scripts\python.exe -m mkdocs serve
+```
+
+Open the local URL printed by MkDocs. Ctrl+C stops the preview server.
+The project-local environment and generated site/ output stay out of Git.
+The builder and live website do not change or run firmware on your ESP32.
+
+## Repository organization
+
+- firmware/: board-side code and versioned messages.
+- tools/: uploader, trace builder/viewer, timing probe and documentation check.
+- tests/: host checks and real-board serial tests.
+- docs/: handbook content.
+- artifacts/: generated local traces/viewers, ignored by Git.
+
+The uploader copies firmware contents to the device root; device imports
+remain unchanged. All documented host commands run from the repository root.
+
+## Optional GitBook sync
+
+The root `.gitbook.yaml` and docs/SUMMARY.md remain available for GitBook
+Git Sync. If you choose to connect a separate GitBook space later, map the
+repository root on branch main so that its root configuration selects docs/.
+The public documentation is currently hosted by GitHub Pages, not GitBook.
 
 ## Editing rules
 
-- Keep console examples aligned with current function signatures.
-- Say which prompt each command belongs to; do not include prompt text
-  inside copyable command blocks.
+- Match command examples to the current paths and function signatures.
+- Say whether a command belongs in PowerShell, robot>, or native >>>.
 - Keep one detailed message-contract reference in messages.md.
 - Distinguish configured rates from measured results and note timing costs.
-- Do not present unimplemented motor, radio or storage features as working.
-- After renaming a chapter, update navigation and relative links.
+- Keep unimplemented motor, radio and storage features clearly identified.
 
 Back to [Handbook introduction →](README.md)

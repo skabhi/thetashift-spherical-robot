@@ -4,8 +4,9 @@ Build, run and extend the ESP32 MicroPython firmware for the ThetaShift
 spherical robot. Start here whether you want to inspect simulated sensors,
 understand task performance, or add a new publisher and subscriber.
 
-This handbook is readable directly on GitHub. Its chapter navigation is
-also ready for GitBook Git Sync; no GitBook account is needed to read it here.
+Read the [documentation website](https://skabhi.github.io/thetashift-spherical-robot/)
+for chapter navigation, search, copyable code and light/dark themes. The same
+Markdown remains readable on GitHub and compatible with GitBook Git Sync.
 
 ## Read in order
 

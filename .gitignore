@@ -7,3 +7,6 @@ captured-timeline.html
 robot-before-*.py
 tmp*/
 .venv/
+.venv-docs/
+site/
+artifacts/

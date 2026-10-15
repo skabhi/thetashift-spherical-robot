@@ -16,8 +16,6 @@ Bars measure elapsed callback time, including any interrupt or garbage collectio
 <canvas id="chart"></canvas><pre id="detail">Load a trace, then hover over a bar for exact timestamps.</pre>
 <p>Very short events are drawn at least two pixels wide for visibility; hover for their measured duration.
 This is an application step trace, not an RTOS context-switch trace. Trace collection itself adds overhead.</p>
-<!-- Updated from trace.json by build_timeline.py; remains entirely local. -->
-<script src="trace-data.js"></script>
 <script>
 let events=[],names=[],hits=[];
 const $=id=>document.getElementById(id), canvas=$('chart'),ctx=canvas.getContext('2d');

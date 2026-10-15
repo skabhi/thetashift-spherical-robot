@@ -33,15 +33,17 @@ On overflow, the first events remain and later events are counted as omitted.
 Press Ctrl+] to disconnect, then use PowerShell in the repository directory:
 
 ```powershell
-py -m mpremote connect COM6 fs cp :trace.json trace.json
-python build_timeline.py
-Start-Process .\captured-timeline.html
+New-Item -ItemType Directory -Force artifacts
+py -m mpremote connect COM6 fs cp :trace.json artifacts/trace.json
+python tools/build_timeline.py
+Start-Process .\artifacts\timeline.html
 ```
 
-`build_timeline.py` validates event JSON, creates `trace-data.js` for
-`timeline.html`, and builds `captured-timeline.html` with data embedded.
-You can also open `timeline.html` and select a downloaded JSON manually.
-Generated traces/viewers are ignored by Git and stay on your computer.
+`tools/build_timeline.py` validates event JSON and builds
+`artifacts/timeline.html` with data embedded. You can also open
+`tools/timeline.html` and select any downloaded JSON manually. Use
+`--trace path/to/trace.json --output path/to/viewer.html` to override the
+builder's input and output. Generated artifacts are ignored by Git.
 
 Each task has a horizontal row. Adjust Start and Window to inspect time;
 hover over a bar for exact microsecond timestamps and duration. Very short

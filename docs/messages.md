@@ -33,7 +33,7 @@ physical sensor model. Those definitions can be added once hardware is chosen.
 
 ## Definition contract
 
-Definitions are fixed scalar layouts in `messages/`, each with a schema
+Definitions are fixed scalar layouts in `firmware/messages/`, each with a schema
 version. Field kinds are `u` (nonnegative integer), `f` (int/float number),
 `b` (boolean), and `s` (string limited to 48 characters). Units and semantics
 are documented beside the definitions. Types are checked on every publish;
@@ -139,7 +139,7 @@ The [console reference](console-tools.md) documents all arguments and fields.
 
 ## Adding a new message and task
 
-Create `messages/temperature.py`:
+Create `firmware/messages/temperature.py`:
 
 ```python
 from message_bus import MessageDef
@@ -152,7 +152,7 @@ TEMPERATURE = MessageDef('Temperature', (
 ))
 ```
 
-Import it from `messages/__init__.py` and `robot.py`, then register it in
+Import it from `firmware/messages/__init__.py` and `firmware/robot.py`, then register it in
 `robot._setup_messages()` before tasks are constructed:
 
 ```python
@@ -186,10 +186,13 @@ def consumer_step():
 
 Add step callbacks to `robot.CALLBACKS` and their rates to
 `robot.FREQUENCIES_HZ`. Construct per-run task state in `_setup_messages()`
-and close subscriptions during shutdown. `example_task.py` demonstrates
+and close subscriptions during shutdown. `firmware/example_task.py` demonstrates
 the complete subscribe/process/publish pattern using the virtual IMU.
-Add any new task module filename to the firmware list in `upload.ps1`;
-Python definition files under `messages/` are uploaded automatically.
+Add any new task module filename to the firmware list in `tools/upload.ps1`;
+Python definition files under `firmware/messages/` are uploaded automatically.
+The uploader changes into firmware/ before copying, preserving root-level
+imports on the board. Repository folders such as tools/ and tests/ are not
+installed on the ESP32.
 
 Increase schema versions when changing contracts. The bus rejects attempts
 to advertise an existing name/instance with a conflicting definition.
