@@ -1,9 +1,9 @@
 # ThetaShift spherical robot
 
-MicroPython starter firmware for a spherical robot, with eight dummy task
-steps, independent target frequencies, a live `top` monitor, and an offline
-execution timeline. Motor, network, messaging, and control logic are still
-placeholders. No motor outputs are configured by this starter.
+MicroPython starter firmware for a spherical robot, with periodic tasks,
+a bounded publish/subscribe message bus, a virtual IMU, a live `top` monitor,
+a topic `listener`, and an offline execution timeline. Physical motor,
+network and control logic remain placeholders. No motor outputs are configured.
 
 The current task system uses cooperative `asyncio` scheduling. Timer-driven
 scheduling is not implemented yet.
@@ -24,7 +24,11 @@ Set-Location thetashift-spherical-robot
 | Messages server middleware | 50 Hz |
 | Manual control | 50 Hz |
 | Velocity control | 50 Hz |
-| Logger | 1 Hz |
+| Virtual IMU | 100 Hz |
+| Example subscriber/publisher | 20 Hz |
+
+There is no scheduled logger task while no storage backend is configured.
+The future logger can subscribe without being part of the control data path.
 
 Edit `FREQUENCIES_HZ` and the matching callbacks in `robot.py` to extend it.
 
@@ -44,7 +48,7 @@ The examples use COM6. Replace it with your board's port. If `py` is not
 available, use `python` in its place. Firmware downloads are available at
 https://micropython.org/download/ESP32_GENERIC/ .
 
-`main.py` starts `robot.console()` on boot. `robot.py` contains the eight task
+`main.py` starts `robot.console()` on boot. `robot.py` contains the task
 steps and the diagnostics. `timeline.html` is an offline trace viewer for
 the computer; do not copy the viewer or the host test script to the ESP32.
 
@@ -59,15 +63,18 @@ Python event loop runnable much of the time, increasing CPU use and power.
 It still yields to other coroutines and does not provide hard real-time
 guarantees. Keep callbacks short and nonblocking.
 
+Task deadlines are dispatched by one coroutine, with an independent period
+for each logical task. `TASK_PHASE_US` staggers IMU, example and middleware
+releases to reduce simultaneous work. This reduces polling overhead compared
+with one precision-polling coroutine per task.
+
 ## PowerShell upload
 
 Close any existing mpremote session using Ctrl+]. Then:
 
 ```powershell
-# Open PowerShell in the folder containing main.py and robot.py.
-py -m mpremote connect COM6 mip install aiorepl
-py -m mpremote connect COM6 fs cp robot.py :robot.py
-py -m mpremote connect COM6 fs cp main.py :main.py
+# Open PowerShell in the repository folder. Close other COM6 connections.
+.\upload.ps1 -Port COM6
 py -m mpremote connect COM6 repl
 ```
 
@@ -75,6 +82,40 @@ Press EN/RESET to boot the new program. The `robot>` async Python prompt stays
 available while tasks run. Ctrl+] exits mpremote without stopping the robot.
 In this async prompt Ctrl+D stops tasks and returns to native `>>>`; in the
 native prompt Ctrl+D performs the usual soft restart.
+
+When updating an already running async console, press Ctrl+D at `robot>`
+to reach native `>>>`, then Ctrl+] to disconnect before uploading. The
+upload script installs aiorepl, copies the definitions and firmware, then
+restarts the board. It copies only Python sources, not host cache files.
+
+## Topics, virtual IMU and listener
+
+At `robot>`:
+
+```python
+await topics()
+await listener('imu_sample', count=3)
+await listener('imu_summary', count=3)
+await listener('task_performance', instance=0, count=3)
+await listener('bus_status', count=1)
+```
+
+Omit `count` to keep listening; Ctrl+C closes only the listener. Use
+`rate_hz=2` to limit display rate (default) and `timeout_ms=5000` to limit
+waiting for a topic that has no new data. `robot.listener()` and
+`robot.topics()` are equivalent to the short console aliases.
+
+```python
+robot.imu_scenario('rotation')       # Constant yaw rate, 0.5 rad/s
+robot.imu_scenario('oscillation')    # Sinusoidal roll, consistent IMU data
+robot.imu_scenario('stationary')     # Default: level and stationary
+await listener('simulation_state', count=3)
+```
+
+The example task subscribes to `imu_sample` and publishes `imu_summary`
+with acceleration/angular-rate magnitudes and the input sequence number.
+See [docs/messages.md](docs/messages.md) for schemas, coordinate frames,
+delivery policies, the copy-and-ownership contract, and adding a task/type.
 
 ## Live top monitor
 
@@ -96,11 +137,17 @@ await robot.top(clear=False)               # Append screens for logging
 robot.report()                            # Snapshot without stopping tasks
 ```
 
-`live_Hz`, `runs`, `skip`, and `avg_us` refer to the latest measured refresh
-window. `max_us` and errors refer to the entire session. The monitor yields
-between row calculations and 32-character serial writes so drawing a whole
-screen does not block control for a serial screen's entire transmission.
-It still has measurement overhead. Avoid blocking Python commands in the
+`top` subscribes to `task_performance` instances. `live_Hz`, `runs`, `skip`,
+and `avg_us` refer to each message's measurement window, published about
+once a second. `age_ms` shows publication age; task rows can have slightly
+different windows because diagnostics are spread over successive steps.
+Initial rows may wait for their first sample. `max_us` and errors refer to
+the entire session. The monitor yields
+between row calculations and paced 16-character serial writes so drawing a
+whole screen does not block control for its entire transmission. It still
+has measurement overhead. Parsing/compiling REPL commands, formatting,
+serial output and garbage collection can reduce rates while interacting;
+the displayed skipped-slot and age counters make this visible. Avoid blocking Python commands in the
 async console, as they pause all cooperative tasks.
 
 To start the async console from a native `>>>` prompt:
@@ -117,7 +164,7 @@ At `robot>` press Ctrl+D first to stop the async console and reach `>>>`.
 ```python
 import robot
 robot.report()                    # Statistics of the last run
-robot.capture(5000)               # Run tasks for 5 seconds, trace, then stop
+robot.capture(5000, capacity=4096) # Run for 5 seconds, trace, then stop
 robot.report()
 robot.timeline(40)                # First 40 steps in execution order
 robot.save_trace("trace.json")    # Write trace only after capture
@@ -127,7 +174,7 @@ robot.console()                  # Resume tasks and async prompt; clears stats
 Each capture clears previous statistics and traces. The native REPL and
 the event loop do not run concurrently; the async console does support
 live commands through aiorepl. Exit that console before timed captures.
-The default 2048-event buffer covers about 6 seconds at the configured rates.
+The default 2048-event buffer covers about 4.6 seconds at the configured rates.
 On overflow the first events are retained and subsequent events are counted
 as omitted; task execution and statistics continue. Maximum capture length
 is 60 seconds. Trace storage uses about 18 KiB at default capacity.
@@ -186,6 +233,7 @@ not establish real ESP32 timing or hardware compatibility.
 From the project directory:
 
 ```powershell
+python -m unittest -v test_message_bus
 python check_diagnostics.py
 ```
 
@@ -199,6 +247,9 @@ For the real board, close other serial connections first:
 # Reset into main.py's async console, then run the interactive serial test.
 py -m mpremote connect COM6 reset
 python test_live_console.py
+# Reset again before the bus/listener integration test.
+py -m mpremote connect COM6 reset
+python test_bus_console.py
 ```
 
 That test uses COM6 at 115200 baud. It starts and closes the live monitor,
@@ -206,7 +257,8 @@ checks that motor counts keep increasing, reopens the monitor, and verifies
 that Ctrl+D returns to the native REPL. It finishes with robot tasks stopped.
 Use EN/RESET to start the console again.
 
-Measured on the original ESP32 at 240 MHz with dummy callbacks:
+The initial scheduler (before adding the message bus and virtual IMU) was
+measured on the original ESP32 at 240 MHz with dummy callbacks:
 
 | Test | Motor frequency | Motor skipped slots |
 | --- | ---: | ---: |
@@ -218,15 +270,38 @@ These results apply to dummy callbacks, not future real workloads. Timing
 still has jitter: the 10-second trace had a longest motor interval of
 approximately 16.7 ms. Retest after implementing actual logic.
 
+After adding the bus, virtual IMU, example task and topic diagnostics, real
+ESP32 verification measured:
+
+| Workload | Motor | Virtual IMU | Skipped slots |
+| --- | ---: | ---: | --- |
+| 10 seconds normal operation | 100.0 Hz | 100.0 Hz | 0 for all tasks |
+| 5 seconds tracing, 4096-event buffer | 99.9 Hz | 99.9 Hz | 0 for all tasks |
+| Active console/listener/top integration, about 12.7 seconds | 94.4 Hz | 94.0 Hz | Motor 71; IMU 76 |
+
+The integration test deliberately issues many REPL commands and draws
+multiple screens. Interactive diagnostics are not timing-neutral. Nine bus
+unit tests and the hardware listener tests passed, including cancellation,
+subscriber cleanup, three IMU scenarios, an unpublished-topic timeout, and
+unknown-topic handling. The 5-second trace held 2205 events without overflow.
+
 ## Files
 
 - `main.py`: boot entry point.
 - `robot.py`: task steps, scheduler, async console, statistics and tracing.
+- `message_bus.py`: bounded topics, independent subscriptions and clock.
+- `messages/`: versioned message definitions in SI units.
+- `virtual_imu.py`: stationary, rotation and oscillation sensor scenarios.
+- `example_task.py`: a reusable subscribe/process/publish task pattern.
+- `upload.ps1`: firmware/definition uploader and restart helper.
+- `docs/messages.md`: message contracts and extension examples.
 - `timeline.html`: offline viewer; select a downloaded trace JSON.
 - `build_timeline.py`: validate a trace and build viewers with it preloaded.
 - `check_diagnostics.py`: host simulation checks.
 - `test_live_console.py`: real board console and monitor integration check.
 - `probe_timing.py`: measure actual asyncio sleep delays on the board.
+- `test_message_bus.py`: host tests of delivery, ownership and simulated IMU.
+- `test_bus_console.py`: real-board listener and message-bus checks.
 
 Local test logs, generated traces and viewers, and old code backups are
 ignored by Git. They are not required to install or run the firmware.

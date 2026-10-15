@@ -4,16 +4,23 @@ import gc
 import machine
 from array import array
 from time import ticks_us, ticks_ms, ticks_add, ticks_diff
+from message_bus import Bus
+from messages import (TASK_PERFORMANCE, BUS_STATUS, IMU_SAMPLE, SIMULATION_STATE,
+                      ROBOT_STATUS, MANUAL_INPUT, VELOCITY_SETPOINT, IMU_SUMMARY)
+from virtual_imu import VirtualIMU
+from example_task import ExampleTask
 
 FREQUENCIES_HZ = {
     "motor": 100, "speed_brake": 50, "wifi": 1, "bluetooth": 20,
-    "messages": 50, "manual": 50, "velocity": 50, "logger": 1,
+    "messages": 50, "manual": 50, "velocity": 50,
+    "virtual_imu": 100, "example": 20,
 }
-LOGGER_PRINT = False
 # Measured on this ESP32 firmware: positive sleeps wake on coarse ~10 ms
 # boundaries, and sleep_ms(10) can take ~20 ms. Keep the event loop runnable
 # near a deadline. This deliberately trades CPU/power for timing precision.
 WAKE_GUARD_US = 12_000
+# Spread the two high-rate releases and diagnostic work across the cycle.
+TASK_PHASE_US = {"virtual_imu": 5000, "example": 8000, "messages": 2000}
 
 # Callbacks are short SYNCHRONOUS steps: no sleep or blocking I/O.
 def motor_control():
@@ -31,8 +38,41 @@ def bluetooth_control():
     pass
 
 def messages_server_middleware():
-    # TODO: Process a bounded number of queued messages.
-    pass
+    # Publish/subscribe itself is synchronous; this task publishes diagnostics
+    # one topic per invocation so a complete screen's work is not one burst.
+    global _diag_index, _next_diag_us
+    now = bus.clock.now_us()
+    if _diag_index < 0:
+        if now < _next_diag_us:
+            return
+        _diag_index = 0
+        _next_diag_us = now + 1_000_000
+    index = _diag_index
+    if index < len(CALLBACKS):
+        name = CALLBACKS[index][0]
+        s = _stats[index]
+        before = _diag_previous[index]
+        window = max(1, now - before[3])
+        runs = s["runs"] - before[0]
+        payload = _performance_payload
+        payload.update(task_id=index, task_name=name, target_hz=FREQUENCIES_HZ[name],
+                       window_us=window, runs=runs, measured_hz=runs * 1_000_000 / window,
+                       skipped=s["skipped"] - before[1],
+                       avg_us=(s["total_us"] - before[2]) / max(1, runs),
+                       max_us=s["max_us"], late_us=s["late_us"], errors=s["errors"])
+        bus.topic("task_performance", index).publish(payload, source_id=3)
+        _diag_previous[index] = (s["runs"], s["skipped"], s["total_us"], now)
+    elif index == len(CALLBACKS):
+        _bus_payload.update(topics=len(bus.topics), subscriptions=bus.subscription_count,
+                            publications=bus.publications, retained_overwrites=bus.retained_overwrites,
+                            subscriber_missed=bus.subscriber_missed, queue_evictions=bus.queue_evictions,
+                            free_heap_bytes=gc.mem_free())
+        bus.topic("bus_status").publish(_bus_payload, source_id=3)
+    else:
+        bus.topic("robot_status").publish(_robot_payload, source_id=3)
+    _diag_index += 1
+    if _diag_index >= len(CALLBACKS) + 2:
+        _diag_index = -1
 
 def manual_control():
     pass
@@ -40,22 +80,57 @@ def manual_control():
 def velocity_control():
     pass
 
-def logger():
-    # Buffer small entries; avoid blocking flash/serial writes here.
-    if LOGGER_PRINT:
-        print("Robot uptime: {} ms".format(ticks_diff(ticks_ms(), _start_ms)))
+def virtual_imu_task():
+    _virtual_imu.step()
+
+
+def example_task():
+    _example.step()
 
 CALLBACKS = (
     ("motor", motor_control), ("speed_brake", speed_and_brake_control),
     ("wifi", wifi_connection), ("bluetooth", bluetooth_control),
     ("messages", messages_server_middleware), ("manual", manual_control),
-    ("velocity", velocity_control), ("logger", logger),
+    ("velocity", velocity_control), ("virtual_imu", virtual_imu_task),
+    ("example", example_task),
 )
 _stats = []
 _trace = None
 _used = _dropped = 0
 _start_ms = _elapsed_ms = 0
 _busy = False
+bus = None
+_session_id = 0
+
+
+def _setup_messages():
+    global bus, _session_id, _virtual_imu, _example
+    global _diag_index, _next_diag_us, _diag_previous
+    global _performance_payload, _bus_payload, _robot_payload
+    _session_id += 1
+    bus = Bus(session_id=_session_id)
+    for name, definition in (("imu_sample", IMU_SAMPLE), ("simulation_state", SIMULATION_STATE),
+                             ("imu_summary", IMU_SUMMARY), ("bus_status", BUS_STATUS),
+                             ("robot_status", ROBOT_STATUS), ("manual_input", MANUAL_INPUT),
+                             ("velocity_setpoint", VELOCITY_SETPOINT)):
+        bus.advertise(name, definition)
+    for index in range(len(CALLBACKS)):
+        bus.advertise("task_performance", TASK_PERFORMANCE, instance=index)
+    _performance_payload = TASK_PERFORMANCE.new()
+    _bus_payload, _robot_payload = BUS_STATUS.new(), ROBOT_STATUS.new()
+    _diag_previous = [(0, 0, 0, bus.clock.now_us()) for _ in CALLBACKS]
+    _diag_index = -1
+    _next_diag_us = bus.clock.now_us() + 1_000_000
+    _virtual_imu = VirtualIMU(bus)
+    _example = ExampleTask(bus)
+    bus.topic("robot_status").publish(_robot_payload, source_id=3)
+
+
+def imu_scenario(name):
+    """Select stationary, rotation or oscillation on the virtual IMU."""
+    if not _busy:
+        raise RuntimeError("Start the robot first")
+    _virtual_imu.set_scenario(name)
 
 
 def maximum_performance():
@@ -95,41 +170,49 @@ async def _wait_until(deadline):
             await asyncio.sleep_ms(0)
 
 
-async def _periodic(index, name, callback):
-    period = round(1_000_000 / FREQUENCIES_HZ[name])
-    deadline = _origin_us
-    s = _stats[index]
+async def _scheduler():
+    # One dispatcher avoids nine separate precision-polling coroutines.
+    # These remain independently timed logical tasks with separate deadlines.
+    jobs = [(name, callback, round(1_000_000 / FREQUENCIES_HZ[name]))
+            for name, callback in CALLBACKS]
+    deadlines = [ticks_add(_origin_us, TASK_PHASE_US.get(name, 0) % period)
+                 for name, _, period in jobs]
     while True:
-        start = ticks_us()
-        late = max(0, ticks_diff(start, deadline))
-        try:
-            callback()
-        except Exception:
-            s["errors"] += 1
-            raise
-        end = ticks_us()
-        duration = ticks_diff(end, start)
-        s["runs"] += 1
-        s["total_us"] += duration
-        s["max_us"] = max(s["max_us"], duration)
-        s["late_us"] = max(s["late_us"], late)
-        if duration > period:
-            s["overruns"] += 1
-        _record(index, start, duration)
-        deadline = ticks_add(deadline, period)
-        remaining = ticks_diff(deadline, ticks_us())
-        if remaining < 0:
-            missed = (-remaining + period - 1) // period
-            s["skipped"] += missed
-            deadline = ticks_add(deadline, missed * period)
-            remaining = max(0, ticks_diff(deadline, ticks_us()))
-        await _wait_until(deadline)
+        for index, (name, callback, period) in enumerate(jobs):
+            start = ticks_us()
+            late = ticks_diff(start, deadlines[index])
+            if late < 0:
+                continue
+            s = _stats[index]
+            try:
+                callback()
+            except Exception:
+                s["errors"] += 1
+                raise
+            duration = ticks_diff(ticks_us(), start)
+            s["runs"] += 1
+            s["total_us"] += duration
+            s["max_us"] = max(s["max_us"], duration)
+            s["late_us"] = max(s["late_us"], late)
+            if duration > period:
+                s["overruns"] += 1
+            _record(index, start, duration)
+            deadline = ticks_add(deadlines[index], period)
+            remaining = ticks_diff(deadline, ticks_us())
+            if remaining < 0:
+                missed = (-remaining + period - 1) // period
+                s["skipped"] += missed
+                deadline = ticks_add(deadline, missed * period)
+            deadlines[index] = deadline
+            await asyncio.sleep_ms(0)
+        now = ticks_us()
+        remaining = min(ticks_diff(deadline, now) for deadline in deadlines)
+        await _wait_until(ticks_add(now, max(0, remaining)))
 
 
 async def _session(duration_ms):
     global _origin_us, _start_ms
-    workers = [asyncio.create_task(_periodic(i, name, callback))
-               for i, (name, callback) in enumerate(CALLBACKS)]
+    workers = [asyncio.create_task(_scheduler())]
     timer = None
     timed_out = [False]
     async def timeout():
@@ -160,11 +243,11 @@ async def _console_session():
     """Keep an asyncio-aware Python prompt alive beside the robot tasks."""
     import aiorepl
     global _origin_us, _start_ms
-    workers = [asyncio.create_task(_periodic(i, name, callback))
-               for i, (name, callback) in enumerate(CALLBACKS)]
+    workers = [asyncio.create_task(_scheduler())]
     _origin_us = ticks_us()
     _start_ms = ticks_ms()
-    namespace = {"robot": __import__(__name__), "asyncio": asyncio}
+    namespace = {"robot": __import__(__name__), "asyncio": asyncio,
+                 "listener": listener, "topics": topics}
     shell = asyncio.create_task(aiorepl.task(namespace, prompt="robot> "))
     failure = [None]
     async def supervise():
@@ -217,6 +300,7 @@ def run(duration_ms=None, trace=False, capacity=2048, console=False):
     cpu = maximum_performance()
     _stats = [dict(runs=0, skipped=0, total_us=0, max_us=0,
                    late_us=0, overruns=0, errors=0) for _ in CALLBACKS]
+    _setup_messages()
     # Bounded storage: approximately 18 KiB for 2048 events.
     _trace = (bytearray(capacity),
               array("i", (0 for _ in range(capacity))),
@@ -235,6 +319,7 @@ def run(duration_ms=None, trace=False, capacity=2048, console=False):
         _elapsed_ms = ticks_diff(ticks_ms(), _start_ms)
         _busy = False
         stop_motors()
+        _example.close()
         asyncio.new_event_loop()
         print("Stopped after {} ms".format(_elapsed_ms))
 
@@ -269,42 +354,94 @@ async def top(refresh_ms=1000, samples=None, clear=True):
         raise ValueError("refresh_ms must be >=250 to limit console traffic")
     if samples is not None and samples < 1:
         raise ValueError("samples must be >=1")
-    previous = [(s["runs"], s["skipped"], s["total_us"]) for s in _stats]
-    previous_us = ticks_us()
+    subscriptions = [bus.subscribe("task_performance", index) for index in range(len(CALLBACKS))]
+    latest = [{} for _ in CALLBACKS]
     frames = 0
     try:
         while samples is None or frames < samples:
-            await _wait_until(ticks_add(previous_us, refresh_ms * 1000))
-            now = ticks_us()
-            window_us = max(1, ticks_diff(now, previous_us))
-            current = [(s["runs"], s["skipped"], s["total_us"]) for s in _stats]
+            await _wait_until(ticks_add(ticks_us(), refresh_ms * 1000))
             lines = ["\x1b[2J\x1b[H" if clear else "",
-                     "ROBOT TOP | {} MHz | window {} ms | heap {} bytes".format(
-                         machine.freq() // 1_000_000, window_us // 1000, gc.mem_free()),
-                     "task          target live_Hz  runs skip avg_us max_us errors"]
-            for (name, _), before, after, s in zip(CALLBACKS, previous, current, _stats):
-                runs = after[0] - before[0]
-                skipped = after[1] - before[1]
-                rate = runs * 1_000_000 / window_us
-                avg = (after[2] - before[2]) / max(1, runs)
-                lines.append("{:<13} {:>6} {:>7.1f} {:>5} {:>4} {:>6.1f} {:>6} {:>6}".format(
-                    name, FREQUENCIES_HZ[name], rate, runs, skipped,
-                    avg, s["max_us"], s["errors"]))
-                # Formatting eight floating-point rows is also measurable
-                # work on the MCU; do not build the screen in one burst.
+                     "ROBOT TOP | {} MHz | task_performance topics | heap {} bytes".format(
+                         machine.freq() // 1_000_000, gc.mem_free()),
+                     "task          target live_Hz  runs skip avg_us max_us errors age_ms"]
+            for (name, _), sub, sample in zip(CALLBACKS, subscriptions, latest):
+                sub.read_into(sample)
+                if sample:
+                    age = max(0, bus.clock.now_us() - sample["timestamp_us"]) // 1000
+                    lines.append("{:<13} {:>6} {:>7.1f} {:>5} {:>4} {:>6.1f} {:>6} {:>6} {:>6}".format(
+                        name, sample["target_hz"], sample["measured_hz"], sample["runs"],
+                        sample["skipped"], sample["avg_us"], sample["max_us"], sample["errors"], age))
+                else:
+                    lines.append("{}: waiting for first performance sample".format(name))
                 await asyncio.sleep_ms(0)
             lines.append("Ctrl+C: close monitor; robot tasks continue. max_us/errors are session totals.")
-            # At 115200 baud a whole screen can block ~70 ms. Send bounded
-            # chunks and yield between them to keep the control steps running.
-            import sys
-            text = "\n".join(lines) + "\n"
-            for offset in range(0, len(text), 32):
-                sys.stdout.write(text[offset:offset + 32])
-                await asyncio.sleep_ms(0)
-            previous, previous_us = current, now
+            await _console_write("\n".join(lines) + "\n")
             frames += 1
     finally:
+        for sub in subscriptions:
+            sub.close()
         print("Monitor closed; robot tasks continue.")
+
+
+async def _console_write(text):
+    import sys
+    # Pace below UART line rate as well as yielding. Otherwise successive
+    # chunks fill the ESP32 TX buffer and a later write can block for a
+    # coarse RTOS tick even though each individual chunk is small.
+    for offset in range(0, len(text), 16):
+        sys.stdout.write(text[offset:offset + 16])
+        await _wait_until(ticks_add(ticks_us(), 5000))
+
+
+async def topics():
+    """List topic instances, schema versions and publication sequences."""
+    if bus is None:
+        raise RuntimeError("Start the robot first")
+    await _console_write("topic[instance]              schema v  depth  sequence  subs\n")
+    for key in sorted(bus.topics):
+        topic = bus.topics[key]
+        await _console_write("{}[{}]  {} v{}  {}  {}  {}\n".format(
+            topic.name, topic.instance, topic.schema.name, topic.schema.version,
+            topic.depth, topic.sequence, len(topic.subscribers)))
+
+
+async def listener(name, instance=0, count=None, rate_hz=2, timeout_ms=5000):
+    """Print snapshots without stopping robot tasks; Ctrl+C closes listener.
+
+    A slow listener intentionally downsamples latest-sample topics. A queued
+    topic is drained one message at a time at the selected display rate.
+    """
+    if bus is None:
+        raise RuntimeError("Start the robot first")
+    if count is not None and (type(count) is not int or count < 1):
+        raise ValueError("count must be a positive integer or None")
+    if not 0.1 <= rate_hz <= 10 or not 1 <= timeout_ms <= 60_000:
+        raise ValueError("rate_hz must be 0.1..10 and timeout_ms 1..60000")
+    if (name, instance) not in bus.topics:
+        raise ValueError("Unknown topic/instance; use await topics()")
+    sub = bus.subscribe(name, instance)
+    sample = {}
+    printed = 0
+    last_data = ticks_ms()
+    try:
+        while count is None or printed < count:
+            if sub.read_into(sample):
+                last_data = ticks_ms()
+                await _console_write("\n{}[{}] sequence={} missed={}\n".format(
+                    name, instance, sample["sequence"], sub.missed))
+                for key, value in sample.items():
+                    await _console_write("  {}: {}\n".format(key, value))
+                printed += 1
+                if count is None or printed < count:
+                    await _wait_until(ticks_add(ticks_us(), round(1_000_000 / rate_hz)))
+            elif ticks_diff(ticks_ms(), last_data) >= timeout_ms:
+                await _console_write("No new data on {}[{}] within {} ms\n".format(name, instance, timeout_ms))
+                break
+            else:
+                await asyncio.sleep_ms(0)
+    finally:
+        sub.close()
+        print("Listener closed; robot task state unchanged.")
 
 
 def timeline(limit=40):

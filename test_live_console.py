@@ -33,9 +33,11 @@ def command(text):
     return receive_until(b'robot> ')
 
 try:
-    # main.py has booted the async console. Ctrl+C redraws its prompt.
-    port.write(b'\x02\x03')
+    # A newline redraws its prompt without interrupting module imports.
+    port.write(b'\x02\r')
     receive_until(b'robot> ')
+    listener = command("await listener('imu_sample', count=2)")
+    assert 'simulated: True' in listener and 'Listener closed' in listener
     finite = command('await robot.top(samples=3, clear=False)')
     assert finite.count('ROBOT TOP |') == 3
     before = command("print('MOTOR_BEFORE', robot._stats[0]['runs'])")
