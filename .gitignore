@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.log
+trace*.json
+trace-data.js
+captured-timeline.html
+robot-before-*.py
+tmp*/
+.venv/

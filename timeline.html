@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Robot task timeline</title>
+<style>
+body{font:15px system-ui;margin:28px;background:#101725;color:#e5edf9}h1{font-size:24px}
+label{display:inline-block;margin:12px 20px 12px 0}input{padding:6px}button{padding:7px}
+canvas{width:100%;height:470px;background:#172236;border:1px solid #526581}
+pre{white-space:pre-wrap}p{max-width:1000px;color:#b9c9df}
+</style>
+<h1>Robot task timeline</h1>
+<p>Open the trace.json copied from your ESP32. Each row shows one task; left to right is execution order.
+Bars measure elapsed callback time, including any interrupt or garbage collection pauses. Gaps include scheduler work and waiting, not necessarily CPU idle time.</p>
+<input type="file" id="file" accept=".json">
+<label>Start (ms) <input id="start" type="number" value="0" min="0" step="1"></label>
+<label>Window (ms) <input id="window" type="number" value="50" min="0.01" step="1"></label>
+<button id="previous">← Previous</button> <button id="next">Next →</button>
+<canvas id="chart"></canvas><pre id="detail">Load a trace, then hover over a bar for exact timestamps.</pre>
+<p>Very short events are drawn at least two pixels wide for visibility; hover for their measured duration.
+This is an application step trace, not an RTOS context-switch trace. Trace collection itself adds overhead.</p>
+<!-- Updated from trace.json by build_timeline.py; remains entirely local. -->
+<script src="trace-data.js"></script>
+<script>
+let events=[],names=[],hits=[];
+const $=id=>document.getElementById(id), canvas=$('chart'),ctx=canvas.getContext('2d');
+const colors=['#65d5ff','#ffa76b','#a5e887','#d7a0ff','#ffe07d','#ff8da8','#6de0c9','#b9cafa'];
+function draw(){
+ const w=canvas.clientWidth,h=470,dpr=devicePixelRatio||1;
+ canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
+ ctx.clearRect(0,0,w,h);hits=[];
+ const start=Math.max(0,Number($('start').value)||0)*1000;
+ const span=Math.max(.01,Number($('window').value)||50)*1000;
+ const left=140,right=w-20,scale=(right-left)/span;
+ ctx.font='12px system-ui';
+ for(let i=0;i<=10;i++){
+  const x=left+(right-left)*i/10;ctx.strokeStyle='#334359';ctx.beginPath();ctx.moveTo(x,35);ctx.lineTo(x,h-20);ctx.stroke();
+  ctx.fillStyle='#b9c9df';ctx.fillText(((start+span*i/10)/1000).toFixed(2),x-12,20);
+ }
+ names.forEach((name,i)=>{ctx.fillStyle=colors[i%colors.length];ctx.fillText(name,12,65+i*48);});
+ for(const e of events){
+  if(e.ts+e.dur<start||e.ts>start+span)continue;
+  const row=names.indexOf(e.name),x=left+Math.max(0,e.ts-start)*scale,y=47+row*48;
+  const end=Math.min(right,left+(e.ts+e.dur-start)*scale);
+  const width=Math.max(2,end-x);ctx.fillStyle=colors[row%colors.length];ctx.fillRect(x,y,width,27);
+  hits.push({x,y,width,event:e});
+ }
+}
+function loadTrace(data){
+  events=data.traceEvents.filter(e=>e.ph==='X'&&Number.isFinite(e.ts)&&Number.isFinite(e.dur)&&e.dur>=0);
+  events.sort((a,b)=>a.ts-b.ts);names=[...new Set(events.map(e=>e.name))];
+  $('detail').textContent=events.length+' captured events. Zoom to 1 ms to inspect closely spaced dummy steps.';draw();
+}
+$('file').onchange=async event=>{
+ try{
+  loadTrace(JSON.parse(await event.target.files[0].text()));
+ }catch(error){$('detail').textContent='Cannot read trace: '+error.message;}
+};
+['start','window'].forEach(id=>$(id).oninput=draw);
+$('previous').onclick=()=>{$('start').value=Math.max(0,Number($('start').value)-Number($('window').value));draw();};
+$('next').onclick=()=>{$('start').value=Number($('start').value)+Number($('window').value);draw();};
+canvas.onmousemove=event=>{
+ const r=canvas.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
+ const hit=hits.find(h=>x>=h.x&&x<=h.x+h.width&&y>=h.y&&y<=h.y+27);
+ if(hit){const e=hit.event;$('detail').textContent=`${e.name}: start ${e.ts} µs; end ${e.ts+e.dur} µs; duration ${e.dur} µs`;}
+};
+addEventListener('resize',draw);draw();
+if(window.robotTrace)loadTrace(window.robotTrace);
+</script></html>
